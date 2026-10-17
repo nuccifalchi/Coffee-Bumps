@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coffee Bumps</title>
+<style>
+  :root {
+    --bg: #f6f4f1; --surface: #ffffff; --text: #1f1b17; --muted: #6f665d; --border: #e4ded7;
+    --accent: #7a4a24; --accent-text: #ffffff; --accent-soft: #f3e9df;
+    --flag: #b4561e; --ok: #2f7a4a; --warn-bg: #fff4e5; --error: #b3261e; --error-bg: #fdecea;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #171412; --surface: #221e1b; --text: #f1ece6; --muted: #a89e94; --border: #3a332d;
+      --accent: #d9a273; --accent-text: #1b1310; --accent-soft: #3a2c21;
+      --flag: #f0995e; --ok: #74c793; --warn-bg: #3a2c1a; --error: #ff8a80; --error-bg: #3b1d1b;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  main { max-width: 1040px; margin: 0 auto; padding: 32px 16px 64px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+  h1 { font-size: 24px; margin: 0; }
+  h1 span { color: var(--muted); font-weight: 400; font-size: 15px; margin-left: 8px; }
+  h2 { font-size: 17px; margin: 0 0 4px; }
+  p.hint { color: var(--muted); margin: 0 0 16px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+  button { font: inherit; border-radius: 8px; padding: 8px 16px; cursor: pointer; border: 1px solid var(--border);
+    background: var(--surface); color: var(--text); }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: .5; cursor: default; }
+  label { display: block; font-weight: 600; margin-bottom: 12px; }
+  label small { display: block; font-weight: 400; color: var(--muted); }
+  input, select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; }
+  label input { display: block; width: 100%; margin-top: 4px; }
+  .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .spacer { flex: 1; }
+  .message { border-radius: 8px; padding: 10px 14px; margin-bottom: 20px; }
+  .message.error { background: var(--error-bg); color: var(--error); }
+  .message.ok { background: var(--accent-soft); }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0 4px; }
+  .chip { background: var(--accent-soft); border-radius: 999px; padding: 2px 10px; font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+  th { text-align: left; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted);
+    padding: 8px; border-bottom: 1px solid var(--border); }
+  td { padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  td.email { max-width: 0; width: 50%; }
+  .subject, .sender { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .subject { font-weight: 600; }
+  .sender, .why { color: var(--muted); font-size: 13px; }
+  tr.flagged .subject::before { content: "⚑ "; color: var(--flag); }
+  label.flag { display: inline-flex; gap: 6px; align-items: center; font-weight: 400; margin: 0; }
+  @media (min-width: 641px) { label.flag { font-size: 0; } label.flag input { font-size: 15px; } }
+  .unsure { background: var(--warn-bg); border-radius: 4px; padding: 0 4px; }
+  .empty { text-align: center; color: var(--muted); padding: 32px 0; }
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent;
+    border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; margin-right: 6px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  [hidden] { display: none !important; }
+  @media (max-width: 640px) {
+    thead { display: none; }
+    tr { display: block; border-bottom: 1px solid var(--border); padding: 8px 0; }
+    td { display: block; border: 0; padding: 4px 0; }
+    td.email { max-width: none; width: auto; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Coffee Bumps <span id="account"></span></h1>
+    <button id="settings-toggle" type="button">Settings</button>
+  </header>
+
+  <div id="message" class="message" hidden></div>
+
+  <section id="settings" class="card" hidden>
+    <h2>Settings</h2>
+    <p class="hint">Saved only on this Mac, in a file only your user account can read. Leave a password field blank to keep the saved one.</p>
+    <form id="settings-form">
+      <label>iCloud email <input name="icloud_email" type="email" autocomplete="username" required></label>
+      <label>App-specific password
+        <small>Create one at account.apple.com → Sign-In and Security → App-Specific Passwords.</small>
+        <input name="icloud_app_password" type="password" autocomplete="off" placeholder="xxxx-xxxx-xxxx-xxxx">
+      </label>
+      <label>TypeSafe API key <input name="typesafe_api_key" type="password" autocomplete="off"></label>
+      <div class="row"><button class="primary" type="submit">Save</button></div>
+    </form>
+  </section>
+
+  <section id="scan-card" class="card" hidden>
+    <div class="row">
+      <div>
+        <h2>Sort your inbox</h2>
+        <p class="hint" style="margin:0">Scanning only suggests changes. Nothing moves until you click Apply.</p>
+      </div>
+      <div class="spacer"></div>
+      <select id="limit" aria-label="How many emails">
+        <option value="25">Newest 25</option><option value="50">Newest 50</option><option value="100">Newest 100</option>
+      </select>
+      <button id="scan" class="primary" type="button">Scan inbox</button>
+    </div>
+  </section>
+
+  <section id="results" class="card" hidden>
+    <div class="row">
+      <h2 id="results-title"></h2>
+      <div class="spacer"></div>
+      <button id="apply" class="primary" type="button">Apply changes</button>
+    </div>
+    <div class="chips" id="chips"></div>
+    <p class="hint">Change any suggestion before applying. Emails you keep in the inbox won't be scanned again.</p>
+    <table>
+      <thead><tr><th>Email</th><th>Put in</th><th>Flag</th><th>Why</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </section>
+</main>
+
+<script>
+const TOKEN = "__TOKEN__";
+const $ = (id) => document.getElementById(id);
+let folders = [];
+
+async function api(path, body) {
+  const response = await fetch(path, {
+    method: body === undefined ? "GET" : "POST",
+    headers: { "X-Token": TOKEN, "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = await response.json().catch(() => ({ error: "Coffee Bumps stopped responding. Is the Terminal window still open?" }));
+  if (!response.ok) throw new Error(data.error || "Something went wrong.");
+  return data;
+}
+
+function showMessage(text, kind) {
+  const box = $("message");
+  box.textContent = text;
+  box.className = "message " + kind;
+  box.hidden = !text;
+}
+
+async function busy(button, label, work) {
+  const original = button.textContent;
+  button.disabled = true;
+  button.innerHTML = '<span class="spinner"></span>';
+  button.append(label);
+  try { await work(); }
+  catch (error) { showMessage(error.message, "error"); }
+  finally { button.disabled = false; button.textContent = original; }
+}
+
+function showSettings(settings) {
+  $("account").textContent = settings.icloud_email || "";
+  $("settings-form").icloud_email.value = settings.icloud_email || "";
+  $("settings").hidden = settings.configured;
+  $("scan-card").hidden = !settings.configured;
+}
+
+$("settings-toggle").onclick = () => { $("settings").hidden = !$("settings").hidden; };
+
+$("settings-form").onsubmit = (event) => {
+  event.preventDefault();
+  const form = event.target;
+  busy(form.querySelector("button"), "Saving", async () => {
+    const settings = await api("/api/settings", Object.fromEntries(new FormData(form)));
+    form.icloud_app_password.value = "";
+    form.typesafe_api_key.value = "";
+    showSettings(settings);
+    showMessage(settings.configured ? "Settings saved." : "Saved. Fill in the remaining fields to start.", "ok");
+  });
+};
+
+$("scan").onclick = () => busy($("scan"), "Scanning… this takes a moment", async () => {
+  showMessage("", "");
+  const data = await api("/api/scan", { limit: Number($("limit").value) });
+  folders = data.folders;
+  renderResults(data.results);
+});
+
+function cell(row, className) {
+  const td = row.insertCell();
+  if (className) td.className = className;
+  return td;
+}
+
+function renderResults(results) {
+  const rows = $("rows");
+  rows.replaceChildren();
+  $("results").hidden = false;
+  $("results-title").textContent = results.length ? `${results.length} new emails` : "Nothing new to sort";
+  $("apply").hidden = !results.length;
+  if (!results.length) {
+    const td = cell(rows.insertRow(), "empty");
+    td.colSpan = 4;
+    td.textContent = "Every email in your inbox has already been handled.";
+  }
+  for (const item of results) {
+    const row = rows.insertRow();
+    row.dataset.uid = item.uid;
+
+    const email = cell(row, "email");
+    for (const [cls, text] of [["subject", item.subject || "(no subject)"], ["sender", item.from]]) {
+      const div = document.createElement("div");
+      div.className = cls;
+      div.textContent = text;
+      div.title = text;
+      email.append(div);
+    }
+
+    const select = document.createElement("select");
+    select.setAttribute("aria-label", "Put in");
+    select.add(new Option("Inbox", ""));
+    for (const folder of folders) select.add(new Option(folder, folder));
+    select.value = item.folder || "";
+    select.onchange = updateSummary;
+    cell(row).append(select);
+
+    const flag = document.createElement("input");
+    flag.type = "checkbox";
+    flag.checked = item.flag;
+    flag.onchange = updateSummary;
+    const flagLabel = document.createElement("label");
+    flagLabel.className = "flag";
+    flagLabel.append(flag, " Flag");
+    cell(row).append(flagLabel);
+
+    const why = cell(row, "why");
+    const unsure = !item.folder && item.reason.startsWith("unsure");
+    why.innerHTML = unsure ? '<span class="unsure"></span>' : "";
+    (unsure ? why.firstChild : why).textContent = item.reason;
+  }
+  updateSummary();
+}
+
+function choices() {
+  return [...$("rows").rows].filter((row) => row.dataset.uid).map((row) => ({
+    uid: row.dataset.uid,
+    folder: row.querySelector("select").value || null,
+    flag: row.querySelector("input").checked,
+    row,
+  }));
+}
+
+function updateSummary() {
+  const counts = {};
+  for (const choice of choices()) {
+    choice.row.classList.toggle("flagged", choice.flag);
+    const key = choice.folder || "Stay in inbox";
+    counts[key] = (counts[key] || 0) + 1;
+    if (choice.flag) counts["Flagged"] = (counts["Flagged"] || 0) + 1;
+  }
+  $("chips").replaceChildren(...Object.entries(counts).map(([name, count]) => {
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    chip.textContent = `${name}: ${count}`;
+    return chip;
+  }));
+}
+
+$("apply").onclick = () => busy($("apply"), "Applying", async () => {
+  const items = choices().map(({ uid, folder, flag }) => ({ uid, folder, flag }));
+  const done = await api("/api/apply", { items });
+  $("results").hidden = true;
+  showMessage(`Done. Moved ${done.moved}, flagged ${done.flagged}, kept ${done.kept} in the inbox.`, "ok");
+});
+
+api("/api/settings").then(showSettings).catch((error) => showMessage(error.message, "error"));
+</script>
+</body>
+</html>

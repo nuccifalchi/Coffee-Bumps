@@ -8,7 +8,7 @@ from typesafe_sdk import TypeSafeClient
 from coffee_bumps.classify import Judgment, decide
 from coffee_bumps.config import Config
 from coffee_bumps.mail import Mailbox, parse_email
-from coffee_bumps.sorter import ProcessedLog, sort_inbox
+from coffee_bumps.sorter import InboxChangedError, ProcessedLog, apply_actions, scan_inbox
 
 
 def make_raw(subject="Hello", body="Hi there", html=None, unsubscribe=False) -> bytes:
@@ -28,7 +28,9 @@ def make_raw(subject="Hello", body="Hi there", html=None, unsubscribe=False) -> 
 
 @pytest.fixture
 def config(tmp_path):
-    return Config(icloud_email="me@icloud.com", icloud_app_password="x", state_path=tmp_path / "state.json")
+    return Config(
+        icloud_email="me@icloud.com", icloud_app_password="x", typesafe_api_key="k", state_path=tmp_path / "state.json"
+    )
 
 
 def test_parse_email_extracts_headers_and_plain_body():
@@ -121,11 +123,12 @@ def typesafe_client(answers_by_subject: dict[str, dict]) -> TypeSafeClient:
     return TypeSafeClient(api_key="test", transport=httpx2.MockTransport(handler), compression=False)
 
 
-def test_sort_inbox_dry_run_changes_nothing(config):
+def test_scan_inbox_changes_nothing(config):
     imap = FakeIMAP({"1": make_raw(subject="Receipt"), "2": make_raw(subject="Lunch?")})
     client = typesafe_client({"Receipt": ("receipts", 0.9, 0.0), "Lunch?": ("personal", 0.9, 0.9)})
-    results = sort_inbox(Mailbox(imap), client, config, ProcessedLog(config.state_path), limit=10, apply=False)
-    assert [(r.message.subject, r.action.folder, r.action.flag) for r in results] == [
+    scan = scan_inbox(Mailbox(imap), client, config, ProcessedLog(config.state_path), limit=10)
+    assert scan.uidvalidity == "1234"
+    assert [(r.message.subject, r.action.folder, r.action.flag) for r in scan.results] == [
         ("Lunch?", None, True),
         ("Receipt", "Receipts", False),
     ]
@@ -133,19 +136,28 @@ def test_sort_inbox_dry_run_changes_nothing(config):
     assert not config.state_path.exists()
 
 
-def test_sort_inbox_apply_moves_flags_and_skips_processed(config):
+def test_apply_actions_moves_flags_and_later_scans_skip(config):
     imap = FakeIMAP({"1": make_raw(subject="Receipt"), "2": make_raw(subject="Lunch?")})
     client = typesafe_client({"Receipt": ("receipts", 0.9, 0.0), "Lunch?": ("personal", 0.9, 0.9)})
-    sort_inbox(Mailbox(imap), client, config, ProcessedLog(config.state_path), limit=10, apply=True)
+    scan = scan_inbox(Mailbox(imap), client, config, ProcessedLog(config.state_path), limit=10)
+    actions = {r.message.uid: r.action for r in scan.results}
+    apply_actions(Mailbox(imap), ProcessedLog(config.state_path), scan.uidvalidity, actions)
     assert ("CREATE", '"Receipts"') in imap.commands
     assert ("MOVE", "1", '"Receipts"') in imap.commands
     assert ("STORE", "2", "+FLAGS", "(\\Flagged)") in imap.commands
     assert list(imap.messages) == ["2"]
 
     imap.commands.clear()
-    again = sort_inbox(Mailbox(imap), client, config, ProcessedLog(config.state_path), limit=10, apply=True)
-    assert again == []
+    again = scan_inbox(Mailbox(imap), client, config, ProcessedLog(config.state_path), limit=10)
+    assert again.results == []
     assert not any(c[0] == "FETCH" for c in imap.commands)
+
+
+def test_apply_actions_refuses_when_inbox_was_reset(config):
+    imap = FakeIMAP({"1": make_raw()})
+    with pytest.raises(InboxChangedError):
+        apply_actions(Mailbox(imap), ProcessedLog(config.state_path), "9999", {})
+    assert not any(c[0] == "MOVE" for c in imap.commands)
 
 
 def test_processed_log_resets_when_uidvalidity_changes(tmp_path):

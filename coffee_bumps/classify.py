@@ -74,7 +74,7 @@ def judge(client: TypeSafeClient, message: Email) -> Judgment:
 
 def decide(judgment: Judgment, config: Config) -> Action:
     if judgment.needs_action >= config.needs_action_threshold:
-        return Action(folder=None, flag=True, reason=f"needs action ({judgment.needs_action:.2f})")
+        return Action(folder=None, flag=True, reason=f"needs action ({judgment.needs_action:.0%} sure)")
     folder = config.folders.get(judgment.category)
     if folder is None:
         return Action(folder=None, flag=False, reason=f"{judgment.category} stays in inbox")
@@ -82,6 +82,6 @@ def decide(judgment: Judgment, config: Config) -> Action:
         return Action(
             folder=None,
             flag=False,
-            reason=f"unsure it is {judgment.category} ({judgment.category_confidence:.2f}), left in inbox",
+            reason=f"unsure: maybe {judgment.category} ({judgment.category_confidence:.0%} sure)",
         )
-    return Action(folder=folder, flag=False, reason=f"{judgment.category} ({judgment.category_confidence:.2f})")
+    return Action(folder=folder, flag=False, reason=f"{judgment.category} ({judgment.category_confidence:.0%} sure)")

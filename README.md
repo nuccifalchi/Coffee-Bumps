@@ -25,39 +25,40 @@ Nothing is ever deleted, and unread mail stays unread.
    .venv/bin/pip install -e .
    ```
 
-2. **An iCloud app-specific password.** Sign in at [account.apple.com](https://account.apple.com), go to Sign-In and Security → App-Specific Passwords, and create one named "Coffee Bumps". Don't use your normal Apple Account password.
+2. **An iCloud app-specific password.** Sign in at [account.apple.com](https://account.apple.com), go to Sign-In and Security → App-Specific Passwords, and create one named "Coffee Bumps". Don't use your normal Apple Account password, and don't share it or screenshot it.
 
 3. **A TypeSafe API key** from your TypeSafe account.
 
-4. **Set them as environment variables** (never put them in the code or commit them):
-
-   ```
-   export ICLOUD_EMAIL="you@icloud.com"
-   export ICLOUD_APP_PASSWORD="xxxx-xxxx-xxxx-xxxx"
-   export TYPESAFE_API_KEY="..."
-   ```
-
 ## Running it
-
-Start with a dry run. It shows what would happen to your 25 newest emails without changing anything:
 
 ```
 .venv/bin/python -m coffee_bumps
 ```
 
-When the results look right, apply them:
+This opens Coffee Bumps in your browser. Keep the Terminal window open while you use it; press Ctrl+C there to stop.
+
+1. **First time:** enter your iCloud email, app-specific password and TypeSafe key, then click Save. They're stored only on your Mac, in `~/.coffee_bumps/settings.json`, which only your user account can read.
+2. **Scan inbox** shows your newest emails with a suggested folder for each. Scanning changes nothing.
+3. Change any suggestion you disagree with, then click **Apply changes**.
+
+Emails that have been handled are remembered in `~/.coffee_bumps/state.json`, so mail left in the inbox isn't judged (and paid for) again.
+
+The page only works from your own Mac: it listens on 127.0.0.1, and other websites can't control it.
+
+### From the Terminal instead
+
+For schedules (for example, cron every 30 minutes), sort without the page:
 
 ```
-.venv/bin/python -m coffee_bumps --apply
+.venv/bin/python -m coffee_bumps run            # show what would happen
+.venv/bin/python -m coffee_bumps run --apply    # flag and move mail
 ```
 
-Use `--limit 100` to look at more mail per run. Emails that have been handled are remembered in `~/.coffee_bumps/state.json`, so mail left in the inbox isn't judged (and paid for) again.
-
-To keep the inbox sorted automatically, run `--apply` on a schedule, for example with cron every 30 minutes.
+Add `--limit 100` to look at more mail per run. Environment variables `ICLOUD_EMAIL`, `ICLOUD_APP_PASSWORD` and `TYPESAFE_API_KEY`, if set, override the saved settings.
 
 ## Tuning
 
-The thresholds are starting points, not tested values. Run a few dry runs on your own mail and adjust:
+The thresholds are starting points, not tested values. Look over a few scans of your own mail and adjust:
 
 - `COFFEE_BUMPS_MIN_CONFIDENCE` (default `0.7`): raise it if mail lands in the wrong folder; lower it if too much is left in the inbox.
 - `COFFEE_BUMPS_NEEDS_ACTION_THRESHOLD` (default `0.6`): raise it if too much gets flagged.

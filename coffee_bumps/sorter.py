@@ -1,4 +1,4 @@
-"""One pass over the inbox: judge new mail and apply the resulting actions."""
+"""Judging new inbox mail, and applying the chosen actions."""
 
 import json
 import logging
@@ -7,17 +7,28 @@ from pathlib import Path
 
 from typesafe_sdk import TypeSafeClient, TypeSafeError
 
-from coffee_bumps.classify import Action, decide, judge
+from coffee_bumps.classify import Action, Judgment, decide, judge
 from coffee_bumps.config import Config
 from coffee_bumps.mail import Email, Mailbox
 
 logger = logging.getLogger(__name__)
 
 
+class InboxChangedError(Exception):
+    """The inbox was reset on the server since the scan, so its message IDs no longer match."""
+
+
 @dataclass(frozen=True)
 class Result:
     message: Email
+    judgment: Judgment
     action: Action
+
+
+@dataclass(frozen=True)
+class Scan:
+    uidvalidity: str
+    results: list[Result]
 
 
 class ProcessedLog:
@@ -51,34 +62,36 @@ class ProcessedLog:
         self._path.write_text(json.dumps({"uidvalidity": self._uidvalidity, "uids": sorted(self._uids, key=int)}))
 
 
-def sort_inbox(
-    mailbox: Mailbox,
-    client: TypeSafeClient,
-    config: Config,
-    processed: ProcessedLog,
-    *,
-    limit: int,
-    apply: bool,
-) -> list[Result]:
-    processed.for_uidvalidity(mailbox.open_inbox())
+def scan_inbox(mailbox: Mailbox, client: TypeSafeClient, config: Config, processed: ProcessedLog, *, limit: int) -> Scan:
+    """Judge up to `limit` of the newest unhandled inbox messages. Changes nothing."""
+    uidvalidity = mailbox.open_inbox()
+    processed.for_uidvalidity(uidvalidity)
     # Newest first; UIDs increase as mail arrives.
     pending = [uid for uid in sorted(mailbox.inbox_uids(), key=int, reverse=True) if uid not in processed][:limit]
     results = []
     for uid in pending:
         message = mailbox.fetch(uid)
         try:
-            action = decide(judge(client, message), config)
+            judgment = judge(client, message)
         except TypeSafeError as error:
-            # Leave the message untouched and unrecorded so the next run retries it.
+            # Leave the message unrecorded so the next scan retries it.
             logger.warning("Could not judge %r: %s", message.subject, error)
             continue
-        if apply:
+        results.append(Result(message, judgment, decide(judgment, config)))
+    return Scan(uidvalidity, results)
+
+
+def apply_actions(mailbox: Mailbox, processed: ProcessedLog, uidvalidity: str, actions: dict[str, Action]) -> None:
+    """Flag and move messages by UID, then remember them so later scans skip them."""
+    if mailbox.open_inbox() != uidvalidity:
+        raise InboxChangedError("Your inbox changed on the server since the scan. Scan again.")
+    processed.for_uidvalidity(uidvalidity)
+    try:
+        for uid, action in actions.items():
             if action.flag:
                 mailbox.flag(uid)
             if action.folder:
                 mailbox.move(uid, action.folder)
             processed.add(uid)
-        results.append(Result(message, action))
-    if apply:
+    finally:
         processed.save()
-    return results
