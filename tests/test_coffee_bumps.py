@@ -1,0 +1,160 @@
+import json
+from email.message import EmailMessage
+
+import httpx2
+import pytest
+from typesafe_sdk import TypeSafeClient
+
+from coffee_bumps.classify import Judgment, decide
+from coffee_bumps.config import Config
+from coffee_bumps.mail import Mailbox, parse_email
+from coffee_bumps.sorter import ProcessedLog, sort_inbox
+
+
+def make_raw(subject="Hello", body="Hi there", html=None, unsubscribe=False) -> bytes:
+    message = EmailMessage()
+    message["From"] = "Sender <sender@example.com>"
+    message["To"] = "me@icloud.com"
+    message["Subject"] = subject
+    message["Date"] = "Fri, 16 Oct 2026 10:00:00 -0700"
+    if unsubscribe:
+        message["List-Unsubscribe"] = "<mailto:unsub@example.com>"
+    if html:
+        message.set_content(html, subtype="html")
+    else:
+        message.set_content(body)
+    return message.as_bytes()
+
+
+@pytest.fixture
+def config(tmp_path):
+    return Config(icloud_email="me@icloud.com", icloud_app_password="x", state_path=tmp_path / "state.json")
+
+
+def test_parse_email_extracts_headers_and_plain_body():
+    parsed = parse_email("7", make_raw(subject="Your order shipped", body="Tracking:   123\n\nThanks", unsubscribe=True))
+    assert parsed.subject == "Your order shipped"
+    assert parsed.sender == "Sender <sender@example.com>"
+    assert parsed.body == "Tracking: 123 Thanks"
+    assert parsed.has_unsubscribe_link
+
+
+def test_parse_email_strips_html_and_scripts():
+    html = "<html><style>p{}</style><body><p>Big <b>sale</b> today</p><script>x()</script></body></html>"
+    assert parse_email("1", make_raw(html=html)).body == "Big sale today"
+
+
+@pytest.mark.parametrize(
+    ("judgment", "folder", "flag"),
+    [
+        (Judgment("receipts", 0.9, 0.1), "Receipts", False),
+        (Judgment("receipts", 0.5, 0.1), None, False),  # unsure: stays in inbox
+        (Judgment("personal", 0.95, 0.1), None, False),  # personal mail never moves
+        (Judgment("other", 0.95, 0.1), None, False),
+        (Judgment("finance", 0.95, 0.8), None, True),  # a bill that is due stays and gets flagged
+    ],
+)
+def test_decide(config, judgment, folder, flag):
+    action = decide(judgment, config)
+    assert (action.folder, action.flag) == (folder, flag)
+
+
+class FakeIMAP:
+    """Enough of imaplib.IMAP4 for Mailbox, recording every command."""
+
+    capabilities = ("IMAP4REV1", "MOVE")
+
+    def __init__(self, messages: dict[str, bytes]):
+        self.messages = messages
+        self.folders = {"INBOX", "Archive"}
+        self.commands = []
+
+    def select(self, mailbox):
+        return "OK", [str(len(self.messages)).encode()]
+
+    def response(self, code):
+        return code, [b"1234"]
+
+    def list(self):
+        return "OK", [f'(\\HasNoChildren) "/" "{name}"'.encode() for name in self.folders]
+
+    def create(self, folder):
+        self.commands.append(("CREATE", folder))
+        self.folders.add(folder.strip('"'))
+        return "OK", [b""]
+
+    def uid(self, command, *args):
+        self.commands.append((command, *args))
+        if command == "SEARCH":
+            return "OK", [" ".join(self.messages).encode()]
+        if command == "FETCH":
+            return "OK", [(f"{args[0]} (UID {args[0]} BODY[]".encode(), self.messages[args[0]]), b")"]
+        if command == "MOVE":
+            del self.messages[args[0]]
+        return "OK", [b""]
+
+
+def typesafe_client(answers_by_subject: dict[str, dict]) -> TypeSafeClient:
+    """A real TypeSafeClient whose HTTP requests are answered locally."""
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        body = json.loads(request.content)
+        assert set(body["questions"]) == {"category", "needs_action"}
+        category, confidence, needs_action = answers_by_subject[body["state"]["email"]["subject"]]
+        return httpx2.Response(
+            200,
+            json={
+                "model": "jev-test",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+                "answers": {
+                    "category": {
+                        "type": "choice",
+                        "choice": category,
+                        "confidence": confidence,
+                        "probabilities": {category: confidence},
+                    },
+                    "needs_action": {"type": "noul", "noul": needs_action},
+                },
+            },
+        )
+
+    return TypeSafeClient(api_key="test", transport=httpx2.MockTransport(handler), compression=False)
+
+
+def test_sort_inbox_dry_run_changes_nothing(config):
+    imap = FakeIMAP({"1": make_raw(subject="Receipt"), "2": make_raw(subject="Lunch?")})
+    client = typesafe_client({"Receipt": ("receipts", 0.9, 0.0), "Lunch?": ("personal", 0.9, 0.9)})
+    results = sort_inbox(Mailbox(imap), client, config, ProcessedLog(config.state_path), limit=10, apply=False)
+    assert [(r.message.subject, r.action.folder, r.action.flag) for r in results] == [
+        ("Lunch?", None, True),
+        ("Receipt", "Receipts", False),
+    ]
+    assert not any(c[0] in ("MOVE", "STORE", "CREATE") for c in imap.commands)
+    assert not config.state_path.exists()
+
+
+def test_sort_inbox_apply_moves_flags_and_skips_processed(config):
+    imap = FakeIMAP({"1": make_raw(subject="Receipt"), "2": make_raw(subject="Lunch?")})
+    client = typesafe_client({"Receipt": ("receipts", 0.9, 0.0), "Lunch?": ("personal", 0.9, 0.9)})
+    sort_inbox(Mailbox(imap), client, config, ProcessedLog(config.state_path), limit=10, apply=True)
+    assert ("CREATE", '"Receipts"') in imap.commands
+    assert ("MOVE", "1", '"Receipts"') in imap.commands
+    assert ("STORE", "2", "+FLAGS", "(\\Flagged)") in imap.commands
+    assert list(imap.messages) == ["2"]
+
+    imap.commands.clear()
+    again = sort_inbox(Mailbox(imap), client, config, ProcessedLog(config.state_path), limit=10, apply=True)
+    assert again == []
+    assert not any(c[0] == "FETCH" for c in imap.commands)
+
+
+def test_processed_log_resets_when_uidvalidity_changes(tmp_path):
+    log = ProcessedLog(tmp_path / "state.json")
+    log.for_uidvalidity("1")
+    log.add("5")
+    log.save()
+    reloaded = ProcessedLog(tmp_path / "state.json")
+    reloaded.for_uidvalidity("1")
+    assert "5" in reloaded
+    reloaded.for_uidvalidity("2")
+    assert "5" not in reloaded

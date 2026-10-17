@@ -1,0 +1,16 @@
+[project]
+name = "coffee-bumps"
+version = "0.1.0"
+description = "Sort an iCloud Mail inbox with TypeSafe judgments."
+requires-python = ">=3.10"
+dependencies = ["typesafe-sdk>=0.7.5,<0.8"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["coffee_bumps"]
