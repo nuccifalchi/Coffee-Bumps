@@ -1,3 +1,4 @@
+import imaplib
 import json
 from email.message import EmailMessage
 
@@ -66,9 +67,10 @@ class FakeIMAP:
 
     capabilities = ("IMAP4REV1", "MOVE")
 
-    def __init__(self, messages: dict[str, bytes]):
+    def __init__(self, messages: dict[str, bytes], seen: set[str] = frozenset()):
         self.messages = messages
-        self.folders = {"INBOX", "Archive"}
+        self.seen = set(seen)
+        self.folders = {"INBOX": "", "Archive": "", "Deleted Messages": " \\Trash"}
         self.commands = []
 
     def select(self, mailbox):
@@ -78,11 +80,11 @@ class FakeIMAP:
         return code, [b"1234"]
 
     def list(self):
-        return "OK", [f'(\\HasNoChildren) "/" "{name}"'.encode() for name in self.folders]
+        return "OK", [f'(\\HasNoChildren{attrs}) "/" "{name}"'.encode() for name, attrs in self.folders.items()]
 
     def create(self, folder):
         self.commands.append(("CREATE", folder))
-        self.folders.add(folder.strip('"'))
+        self.folders[folder.strip('"')] = ""
         return "OK", [b""]
 
     def uid(self, command, *args):
@@ -90,7 +92,8 @@ class FakeIMAP:
         if command == "SEARCH":
             return "OK", [" ".join(self.messages).encode()]
         if command == "FETCH":
-            return "OK", [(f"{args[0]} (UID {args[0]} BODY[]".encode(), self.messages[args[0]]), b")"]
+            flags = "\\Seen" if args[0] in self.seen else ""
+            return "OK", [(f"{args[0]} (UID {args[0]} FLAGS ({flags}) BODY[]".encode(), self.messages[args[0]]), b")"]
         if command == "MOVE":
             del self.messages[args[0]]
         return "OK", [b""]
@@ -170,3 +173,31 @@ def test_processed_log_resets_when_uidvalidity_changes(tmp_path):
     assert "5" in reloaded
     reloaded.for_uidvalidity("2")
     assert "5" not in reloaded
+
+
+def test_fetch_reports_unread_from_flags_not_body():
+    imap = FakeIMAP({"1": make_raw(body="I have \\Seen this"), "2": make_raw()}, seen={"2"})
+    mailbox = Mailbox(imap)
+    assert mailbox.fetch("1").unread
+    assert not mailbox.fetch("2").unread
+
+
+def test_apply_actions_marks_read_then_trashes(config):
+    imap = FakeIMAP({"1": make_raw(subject="Junk")})
+    from coffee_bumps.classify import Action
+
+    actions = {"1": Action(folder=None, flag=False, reason="", mark_read=True, trash=True)}
+    apply_actions(Mailbox(imap), ProcessedLog(config.state_path), "1234", actions)
+    stores = [c for c in imap.commands if c[0] == "STORE"]
+    assert stores == [("STORE", "1", "+FLAGS", "(\\Seen)")]
+    assert imap.commands[-1] == ("MOVE", "1", '"Deleted Messages"')
+    assert not any(c[0] in ("CREATE", "EXPUNGE") for c in imap.commands)
+    assert imap.messages == {}
+
+
+def test_trash_refuses_without_a_trash_folder(config):
+    imap = FakeIMAP({"1": make_raw()})
+    del imap.folders["Deleted Messages"]
+    with pytest.raises(imaplib.IMAP4.error):
+        Mailbox(imap).trash("1")
+    assert "1" in imap.messages

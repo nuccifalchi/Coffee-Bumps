@@ -14,7 +14,7 @@ Coffee Bumps then decides what to do:
 | Receipts, finance, newsletters, notifications, travel, and TypeSafe is confident | Moved to a folder of that name (created if missing) |
 | TypeSafe isn't confident about the category | Stays in the inbox |
 
-Nothing is ever deleted, and unread mail stays unread.
+Scanning never marks mail as read. On the page you can also mark emails as read, or delete them: deleted emails go to iCloud's Deleted Messages folder, where you can recover them for 30 days.
 
 ## Setup
 
@@ -39,7 +39,7 @@ This opens Coffee Bumps in your browser. Keep the Terminal window open while you
 
 1. **First time:** enter your iCloud email, app-specific password and TypeSafe key, then click Save. They're stored only on your Mac, in `~/.coffee_bumps/settings.json`, which only your user account can read.
 2. **Scan inbox** shows your newest emails with a suggested folder for each. Scanning changes nothing.
-3. Change any suggestion you disagree with, then click **Apply changes**.
+3. Change any suggestion you disagree with. Tick **Read** to clear the unread badge (the box in the header ticks them all), or choose **Delete** in the dropdown. Then click **Apply changes**. You'll be asked to confirm before anything is deleted.
 
 Emails that have been handled are remembered in `~/.coffee_bumps/state.json`, so mail left in the inbox isn't judged (and paid for) again.
 

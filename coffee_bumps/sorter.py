@@ -82,15 +82,20 @@ def scan_inbox(mailbox: Mailbox, client: TypeSafeClient, config: Config, process
 
 
 def apply_actions(mailbox: Mailbox, processed: ProcessedLog, uidvalidity: str, actions: dict[str, Action]) -> None:
-    """Flag and move messages by UID, then remember them so later scans skip them."""
+    """Mark read, flag, trash or move messages by UID, then remember them so later scans skip them."""
     if mailbox.open_inbox() != uidvalidity:
         raise InboxChangedError("Your inbox changed on the server since the scan. Scan again.")
     processed.for_uidvalidity(uidvalidity)
     try:
         for uid, action in actions.items():
+            # Flags travel with the message, so set them before it moves.
+            if action.mark_read:
+                mailbox.mark_read(uid)
             if action.flag:
                 mailbox.flag(uid)
-            if action.folder:
+            if action.trash:
+                mailbox.trash(uid)
+            elif action.folder:
                 mailbox.move(uid, action.folder)
             processed.add(uid)
     finally:

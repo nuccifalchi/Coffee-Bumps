@@ -42,11 +42,13 @@ class Judgment:
 
 @dataclass(frozen=True)
 class Action:
-    """What to do with one email: move it to `folder`, or leave it in the inbox (`folder` is None)."""
+    """What to do with one email: move it to `folder`, leave it in the inbox (`folder` is None), or trash it."""
 
     folder: str | None
     flag: bool
     reason: str
+    mark_read: bool = False
+    trash: bool = False
 
 
 def email_state(message: Email) -> dict:

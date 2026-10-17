@@ -51,9 +51,17 @@
   td { padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
   td.email { max-width: 0; width: 50%; }
   .subject, .sender { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .subject { font-weight: 600; }
+  .subject { font-weight: 400; }
+  tr.unread .subject { font-weight: 600; }
   .sender, .why { color: var(--muted); font-size: 13px; }
   tr.flagged .subject::before { content: "⚑ "; color: var(--flag); }
+  tr.unread .subject::after { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--accent); margin-left: 8px; vertical-align: 1px; }
+  tr.unread.read-done .subject { font-weight: 400; }
+  tr.read-done .subject::after { display: none; }
+  tr.trashed .email { opacity: .55; }
+  tr.trashed .subject { text-decoration: line-through; }
+  th label { display: inline-flex; gap: 6px; align-items: center; margin: 0; font-weight: inherit; cursor: pointer; }
   label.flag { display: inline-flex; gap: 6px; align-items: center; font-weight: 400; margin: 0; }
   @media (min-width: 641px) { label.flag { font-size: 0; } label.flag input { font-size: 15px; } }
   .unsure { background: var(--warn-bg); border-radius: 4px; padding: 0 4px; }
@@ -114,9 +122,9 @@
       <button id="apply" class="primary" type="button">Apply changes</button>
     </div>
     <div class="chips" id="chips"></div>
-    <p class="hint">Change any suggestion before applying. Emails you keep in the inbox won't be scanned again.</p>
+    <p class="hint">Change any suggestion before applying. Tick Read to clear the unread badge. Delete moves an email to Deleted Messages, where you can recover it for 30 days. Emails you keep in the inbox won't be scanned again.</p>
     <table>
-      <thead><tr><th>Email</th><th>Put in</th><th>Flag</th><th>Why</th></tr></thead>
+      <thead><tr><th>Email</th><th>Put in</th><th><label><input id="read-all" type="checkbox"> Read</label></th><th>Flag</th><th>Why</th></tr></thead>
       <tbody id="rows"></tbody>
     </table>
   </section>
@@ -197,12 +205,13 @@ function renderResults(results) {
   $("apply").hidden = !results.length;
   if (!results.length) {
     const td = cell(rows.insertRow(), "empty");
-    td.colSpan = 4;
+    td.colSpan = 5;
     td.textContent = "Every email in your inbox has already been handled.";
   }
   for (const item of results) {
     const row = rows.insertRow();
     row.dataset.uid = item.uid;
+    row.classList.toggle("unread", item.unread);
 
     const email = cell(row, "email");
     for (const [cls, text] of [["subject", item.subject || "(no subject)"], ["sender", item.from]]) {
@@ -217,18 +226,20 @@ function renderResults(results) {
     select.setAttribute("aria-label", "Put in");
     select.add(new Option("Inbox", ""));
     for (const folder of folders) select.add(new Option(folder, folder));
+    const separator = new Option("──────", "");
+    separator.disabled = true;
+    select.add(separator);
+    select.add(new Option("Delete", TRASH));
     select.value = item.folder || "";
     select.onchange = updateSummary;
     cell(row).append(select);
 
-    const flag = document.createElement("input");
-    flag.type = "checkbox";
-    flag.checked = item.flag;
-    flag.onchange = updateSummary;
-    const flagLabel = document.createElement("label");
-    flagLabel.className = "flag";
-    flagLabel.append(flag, " Flag");
-    cell(row).append(flagLabel);
+    const read = checkbox("read", !item.unread, "Read");
+    read.querySelector("input").disabled = !item.unread;
+    if (!item.unread) read.title = "Already read";
+    cell(row).append(read);
+
+    cell(row).append(checkbox("flag", item.flag, "Flag"));
 
     const why = cell(row, "why");
     const unsure = !item.folder && item.reason.startsWith("unsure");
@@ -238,21 +249,49 @@ function renderResults(results) {
   updateSummary();
 }
 
-function choices() {
-  return [...$("rows").rows].filter((row) => row.dataset.uid).map((row) => ({
-    uid: row.dataset.uid,
-    folder: row.querySelector("select").value || null,
-    flag: row.querySelector("input").checked,
-    row,
-  }));
+const TRASH = "__trash__";
+
+function checkbox(name, checked, text) {
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.name = name;
+  input.checked = checked;
+  input.onchange = updateSummary;
+  const label = document.createElement("label");
+  label.className = "flag";
+  label.append(input, " " + text);
+  return label;
 }
+
+function choices() {
+  return [...$("rows").rows].filter((row) => row.dataset.uid).map((row) => {
+    const value = row.querySelector("select").value;
+    const read = row.querySelector('input[name="read"]');
+    return {
+      uid: row.dataset.uid,
+      folder: value && value !== TRASH ? value : null,
+      trash: value === TRASH,
+      mark_read: read.checked && !read.disabled,
+      flag: row.querySelector('input[name="flag"]').checked,
+      row,
+    };
+  });
+}
+
+$("read-all").onchange = (event) => {
+  for (const box of document.querySelectorAll('#rows input[name="read"]:not(:disabled)')) box.checked = event.target.checked;
+  updateSummary();
+};
 
 function updateSummary() {
   const counts = {};
   for (const choice of choices()) {
     choice.row.classList.toggle("flagged", choice.flag);
-    const key = choice.folder || "Stay in inbox";
+    choice.row.classList.toggle("trashed", choice.trash);
+    choice.row.classList.toggle("read-done", choice.mark_read);
+    const key = choice.trash ? "Delete" : choice.folder || "Stay in inbox";
     counts[key] = (counts[key] || 0) + 1;
+    if (choice.mark_read) counts["Mark read"] = (counts["Mark read"] || 0) + 1;
     if (choice.flag) counts["Flagged"] = (counts["Flagged"] || 0) + 1;
   }
   $("chips").replaceChildren(...Object.entries(counts).map(([name, count]) => {
@@ -263,12 +302,18 @@ function updateSummary() {
   }));
 }
 
-$("apply").onclick = () => busy($("apply"), "Applying", async () => {
-  const items = choices().map(({ uid, folder, flag }) => ({ uid, folder, flag }));
-  const done = await api("/api/apply", { items });
-  $("results").hidden = true;
-  showMessage(`Done. Moved ${done.moved}, flagged ${done.flagged}, kept ${done.kept} in the inbox.`, "ok");
-});
+$("apply").onclick = () => {
+  const items = choices().map(({ uid, folder, trash, mark_read, flag }) => ({ uid, folder, trash, mark_read, flag }));
+  const deleting = items.filter((item) => item.trash).length;
+  if (deleting && !confirm(`Delete ${deleting} email${deleting === 1 ? "" : "s"}? They'll go to Deleted Messages, where you can recover them for 30 days.`)) return;
+  busy($("apply"), "Applying", async () => {
+    const done = await api("/api/apply", { items });
+    $("results").hidden = true;
+    $("read-all").checked = false;
+    const parts = [`moved ${done.moved}`, `deleted ${done.deleted}`, `marked ${done.marked_read} read`, `flagged ${done.flagged}`];
+    showMessage(`Done: ${parts.join(", ")}. ${done.kept} kept in the inbox.`, "ok");
+  });
+};
 
 api("/api/settings").then(showSettings).catch((error) => showMessage(error.message, "error"));
 </script>

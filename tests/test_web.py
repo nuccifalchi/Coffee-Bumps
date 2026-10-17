@@ -96,11 +96,30 @@ def test_scan_then_apply_with_user_override(fake_services):
         assert not fake_services.messages.keys() - {"1", "2"}
 
         # The user overrides the suggestion: the receipt goes to Finance instead.
-        items = [{"uid": "1", "folder": "Finance", "flag": False}, {"uid": "2", "folder": None, "flag": True}]
+        items = [
+            {"uid": "1", "folder": "Finance", "flag": False},
+            {"uid": "2", "folder": None, "flag": True, "mark_read": True},
+        ]
         status, data = request(port, "POST", "/api/apply", {"items": items}, token=app.token)
-        assert status == 200 and json.loads(data) == {"moved": 1, "flagged": 1, "kept": 1}
+        assert status == 200
+        assert json.loads(data) == {"moved": 1, "deleted": 0, "marked_read": 1, "flagged": 1, "kept": 1}
     assert ("MOVE", "1", '"Finance"') in fake_services.commands
     assert ("STORE", "2", "+FLAGS", "(\\Flagged)") in fake_services.commands
+    assert ("STORE", "2", "+FLAGS", "(\\Seen)") in fake_services.commands
+
+
+def test_delete_moves_to_deleted_messages(fake_services):
+    config_module.save_settings({"icloud_email": "me@icloud.com", "icloud_app_password": "pw", "typesafe_api_key": "k"})
+    with running_server() as (app, port):
+        status, data = request(port, "POST", "/api/scan", {"limit": 10}, token=app.token)
+        assert all(r["unread"] for r in json.loads(data)["results"])
+        both = {"items": [{"uid": "1", "folder": "Finance", "trash": True}]}
+        assert request(port, "POST", "/api/apply", both, token=app.token)[0] == 400
+        items = {"items": [{"uid": "1", "trash": True}]}
+        status, data = request(port, "POST", "/api/apply", items, token=app.token)
+        assert json.loads(data)["deleted"] == 1
+    assert ("MOVE", "1", '"Deleted Messages"') in fake_services.commands
+    assert "2" in fake_services.messages
 
 
 def test_apply_rejects_unknown_folder_or_message(fake_services):

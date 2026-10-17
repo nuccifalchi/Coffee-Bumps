@@ -66,6 +66,7 @@ class App:
                     "from": r.message.sender,
                     "subject": r.message.subject,
                     "date": r.message.date,
+                    "unread": r.message.unread,
                     "category": r.judgment.category,
                     "confidence": round(r.judgment.category_confidence, 2),
                     "needs_action": round(r.judgment.needs_action, 2),
@@ -84,10 +85,16 @@ class App:
             scanned = {r.message.uid for r in self._last_scan.results}
             actions = {}
             for item in body.get("items", []):
-                uid, folder = str(item.get("uid")), item.get("folder") or None
-                if uid not in scanned or (folder is not None and folder not in folders):
+                uid, folder, trash = str(item.get("uid")), item.get("folder") or None, bool(item.get("trash"))
+                if uid not in scanned or (folder is not None and (trash or folder not in folders)):
                     raise UserError("That change doesn't match the last scan. Scan again.")
-                actions[uid] = Action(folder=folder, flag=bool(item.get("flag")), reason="chosen on the page")
+                actions[uid] = Action(
+                    folder=folder,
+                    flag=bool(item.get("flag")),
+                    mark_read=bool(item.get("mark_read")),
+                    trash=trash,
+                    reason="chosen on the page",
+                )
             with self._mailbox(config) as mailbox:
                 try:
                     apply_actions(mailbox, ProcessedLog(config.state_path), self._last_scan.uidvalidity, actions)
@@ -96,8 +103,10 @@ class App:
             self._last_scan = None
         return {
             "moved": sum(1 for a in actions.values() if a.folder),
+            "deleted": sum(1 for a in actions.values() if a.trash),
+            "marked_read": sum(1 for a in actions.values() if a.mark_read),
             "flagged": sum(1 for a in actions.values() if a.flag),
-            "kept": sum(1 for a in actions.values() if not a.folder),
+            "kept": sum(1 for a in actions.values() if not a.folder and not a.trash),
         }
 
     @staticmethod
